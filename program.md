@@ -1,114 +1,158 @@
-# autoresearch
+# autoresearch systems program
 
-This is an experiment to have the LLM do its own research.
+This program is for autonomous **systems research**, not just autonomous model training.
+
+Your job is to iterate on a target systems repository, keep only evidence-backed improvements, and steadily convert a prototype into something that could support a top systems paper.
+
+The default mental model is:
+
+- the controller repo contains prompts and playbooks
+- the target repo contains the actual system you improve
+- `research/autoresearch/` inside the target repo contains the durable research state
+
+The workflow is meant to generalize across systems and infrastructure repos.
 
 ## Setup
 
-To set up a new experiment, work with the user to:
+Before changing code, do the following:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar5`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
-2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current master.
-3. **Read the in-scope files**: The repo is small. Read these files for full context:
-   - `README.md` — repository context.
-   - `prepare.py` — fixed constants, data prep, tokenizer, dataloader, evaluation. Do not modify.
-   - `train.py` — the file you modify. Model architecture, optimizer, training loop.
-4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data shards and a tokenizer. If not, tell the human to run `uv run prepare.py`.
-5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
-6. **Confirm and go**: Confirm setup looks good.
+1. Identify the target repo and confirm you are working on the target, not just the controller repo.
+2. Create a fresh research branch in the target repo, typically `autoresearch/<tag>`, where `<tag>` is based on the date and focus.
+3. Read the target repo's top-level context first:
+   - `README.md`
+   - project instructions such as `CLAUDE.md`
+   - `pyproject.toml` or equivalent build config
+   - benchmark scripts
+   - test suite
+   - the smallest set of source files needed to understand the current bottleneck
+4. Ensure the target repo has a research workspace at `research/autoresearch/`.
+   - If it does not exist yet, initialize it with this controller repo's bootstrap utility.
+   - Example: `uv run <controller-repo>/bootstrap_system_project.py --target-repo <target-repo> --profile systems`
+5. Read the target repo's `research/autoresearch/manifest.json`, `experiments.tsv`, `claim_ledger.md`, and `runbook.md` before proposing the next experiment.
+6. Establish a baseline before any optimization:
+   - current commit hash
+   - correctness status
+   - benchmark results
+   - at least one representative trace for bottleneck analysis
+7. Record the baseline in `research/autoresearch/experiments.tsv`.
 
-Once you get confirmation, kick off the experimentation.
+Once the baseline exists, the autonomous loop begins.
 
-## Experimentation
+## Core Objective
 
-Each experiment runs on a single GPU. The training script runs for a **fixed time budget of 5 minutes** (wall clock training time, excluding startup/compilation). You launch it simply as: `uv run train.py`.
+Improve the target system along dimensions that matter for a publishable systems artifact:
 
-**What you CAN do:**
-- Modify `train.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, training loop, batch size, model size, etc.
+- end-to-end performance on representative workloads
+- correctness and semantic stability
+- subsystem clarity and measurability
+- reproducibility of claims
+- ablation-ready experimental evidence
 
-**What you CANNOT do:**
-- Modify `prepare.py`. It is read-only. It contains the fixed evaluation, data loading, tokenizer, and training constants (time budget, sequence length, etc).
-- Install new packages or add dependencies. You can only use what's already in `pyproject.toml`.
-- Modify the evaluation harness. The `evaluate_bpb` function in `prepare.py` is the ground truth metric.
+This is not a "ship random optimizations until a graph goes down" loop. It is a research loop.
 
-**The goal is simple: get the lowest val_bpb.** Since the time budget is fixed, you don't need to worry about training time — it's always 5 minutes. Everything is fair game: change the architecture, the optimizer, the hyperparameters, the batch size, the model size. The only constraint is that the code runs without crashing and finishes within the time budget.
+## What You Can Change
 
-**VRAM** is a soft constraint. Some increase is acceptable for meaningful val_bpb gains, but it should not blow up dramatically.
+You may change anything inside the target repo that materially improves the system or the evidence quality:
 
-**Simplicity criterion**: All else being equal, simpler is better. A small improvement that adds ugly complexity is not worth it. Conversely, removing something and getting equal or better results is a great outcome — that's a simplification win. When evaluating whether to keep a change, weigh the complexity cost against the improvement magnitude. A 0.001 val_bpb improvement that adds 20 lines of hacky code? Probably not worth it. A 0.001 val_bpb improvement from deleting code? Definitely keep. An improvement of ~0 but much simpler code? Keep.
+- source code
+- tests
+- benchmark harnesses
+- instrumentation and tracing
+- docs that explain design or claims
+- small utilities that improve reproducibility
 
-**The first run**: Your very first run should always be to establish the baseline, so you will run the training script as is.
+You may also improve the research workspace under `research/autoresearch/` as long as the logs remain honest and reproducible.
 
-## Output format
+## What You Must Not Do
 
-Once the script finishes it prints a summary like this:
+- Do not make performance claims without benchmarks.
+- Do not make mechanism claims without traces, ablations, or direct evidence.
+- Do not quietly change workload semantics or evaluation assumptions without recording it.
+- Do not delete contradictory evidence because it is inconvenient.
+- Do not keep a code change just because it is clever. Keep it only if the evidence and complexity tradeoff justify it.
+- Do not optimize for a single cherry-picked case if the broader workload story gets weaker.
 
-```
----
-val_bpb:          0.997900
-training_seconds: 300.1
-total_seconds:    325.9
-peak_vram_mb:     45060.2
-mfu_percent:      39.80
-total_tokens_M:   499.6
-num_steps:        953
-num_params_M:     50.3
-depth:            8
-```
+## Keep / Discard Rule
 
-Note that the script is configured to always stop after 5 minutes, so depending on the computing platform of this computer the numbers might look different. You can extract the key metric from the log file:
+Keep a change only if all of the following hold:
 
-```
-grep "^val_bpb:" run.log
-```
+1. The relevant correctness checks pass.
+2. The benchmark or trace evidence supports the intended improvement.
+3. The gain is large enough, or the measurement improvement is important enough, to justify the added complexity.
+4. The experiment is logged in `research/autoresearch/experiments.tsv`.
+5. Any resulting claim or caveat is updated in `research/autoresearch/claim_ledger.md`.
 
-## Logging results
+Discard the change if it regresses correctness, weakens the broader benchmark picture, or adds complexity without a compelling research payoff.
 
-When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
+## The Experiment Loop
 
-The TSV has a header row and 5 columns:
+LOOP FOREVER until interrupted by the human:
 
-```
-commit	val_bpb	memory_gb	status	description
-```
+1. Inspect the current best commit, latest experiment log, and outstanding bottlenecks.
+2. Choose a single hypothesis grounded in evidence.
+3. Implement the smallest meaningful change that tests that hypothesis.
+4. Run the fastest correctness checks first.
+5. Run the relevant benchmark slice.
+6. If the result is promising, run at least one deeper validation pass:
+   - a fuller benchmark suite
+   - a representative trace
+   - a focused ablation
+7. Save artifacts in a run-specific directory under `research/autoresearch/artifacts/`.
+8. Update `experiments.tsv` with the outcome.
+9. Update `claim_ledger.md` with:
+   - supported claims
+   - promising but unverified ideas
+   - refuted ideas
+   - threats to validity
+10. Keep the commit only if the evidence clears the keep rule. Otherwise revert and move on.
 
-1. git commit hash (short, 7 chars)
-2. val_bpb achieved (e.g. 1.234567) — use 0.000000 for crashes
-3. peak memory in GB, round to .1f (e.g. 12.3 — divide peak_vram_mb by 1024) — use 0.0 for crashes
-4. status: `keep`, `discard`, or `crash`
-5. short text description of what this experiment tried
+## Research Discipline
 
-Example:
+Prefer this order of work:
 
-```
-commit	val_bpb	memory_gb	status	description
-a1b2c3d	0.997900	44.0	keep	baseline
-b2c3d4e	0.993200	44.2	keep	increase LR to 0.04
-c3d4e5f	1.005000	44.0	discard	switch to GeLU activation
-d4e5f6g	0.000000	0.0	crash	double model width (OOM)
-```
+1. Characterization
+2. Bottleneck isolation
+3. Minimal mechanism
+4. Validation
+5. Ablation
+6. Generalization across workloads
+7. Paper-shaping documentation
 
-## The experiment loop
+In practice this means:
 
-The experiment runs on a dedicated branch (e.g. `autoresearch/mar5` or `autoresearch/mar5-gpu0`).
+- instrument before guessing
+- reduce bottlenecks one at a time when possible
+- separate measurement improvements from system improvements
+- preserve negative results so the project does not rediscover the same dead ends
+- favor exact, narrow, reproducible claims over broad but shaky ones
 
-LOOP FOREVER:
+## Paper-Oriented Output
 
-1. Look at the git state: the current branch/commit we're on
-2. Tune `train.py` with an experimental idea by directly hacking the code.
-3. git commit
-4. Run the experiment: `uv run train.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
-5. Read out the results: `grep "^val_bpb:\|^peak_vram_mb:" run.log`
-6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
-7. Record the results in the tsv (NOTE: do not commit the results.tsv file, leave it untracked by git)
-8. If val_bpb improved (lower), you "advance" the branch, keeping the git commit
-9. If val_bpb is equal or worse, you git reset back to where you started
+The target repo should gradually accumulate everything needed for a strong systems submission:
 
-The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
+- a clean thesis
+- a benchmark harness
+- a claim ledger
+- ablations that isolate each mechanism
+- representative traces that explain why the system wins
+- honest limitations and non-wins
 
-**Timeout**: Each experiment should take ~5 minutes total (+ a few seconds for startup and eval overhead). If a run exceeds 10 minutes, kill it and treat it as a failure (discard and revert).
+Every strong code change should make the eventual paper easier to write.
 
-**Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
+## Playbooks
 
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+If the controller repo contains a playbook that matches the target repo's shape, read it before choosing the next experiment.
 
-As an example use case, a user might leave you running while they sleep. If each experiment takes you ~5 minutes then you can run approx 12/hour, for a total of about 100 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!
+Typical playbook use cases include:
+
+- workflow runtimes
+- distributed systems
+- storage engines
+- networked services
+- compiler or runtime infrastructure
+
+Playbooks should sharpen metrics, guardrails, and experiment priorities for the target without changing the broader research discipline above.
+
+## Autonomy
+
+Do not stop after one experiment. Do not ask the human whether to continue after each small result. Maintain momentum, keep the logs honest, and continue iterating until the human interrupts you.
